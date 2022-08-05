@@ -1,4 +1,9 @@
-# Prohelion EV Driver Controls (PHLN-3000-0008)
+# AR-SP22: VCU Code for Prohelion EV Driver Controls (PHLN-3000-0008)
+
+This repository contains a modified version of the open-source firmware for the Prohelion EV Drive Controls unit.
+The code modifications have been made specifically for use in Academy Racing's 2022 EV car.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------
 
 This repository contains the open-source firmware for the Prohelion EV Driver Controls unit. The devcie can be purchased from the [Prohelion Website](https://www.prohelion.com)
 
