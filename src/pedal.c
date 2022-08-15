@@ -46,7 +46,7 @@ command_variables	command;
 /*
  * Process analog pedal inputs
  * Basic stuff only at this point: map channel A to 0-100% current, no regen or redundancy
- *
+ * In theory there should be redundancy; need to check on the actual system.
  */
 void process_pedal( unsigned int analog_a, unsigned int analog_b, unsigned int analog_c, unsigned char request_regen )
 {
@@ -60,7 +60,8 @@ void process_pedal( unsigned int analog_a, unsigned int analog_b, unsigned int a
 	if(analog_a > PEDAL_ERROR_MAX) command.flags |= FAULT_ACCEL_HIGH;
 	else command.flags &= ~FAULT_ACCEL_HIGH;
 	// Pedal A & B mismatch
-	// not implemented...
+    if((analog_a > analog_b + PEDAL_MISMATCH_MAX) || (analog_a < analog_b - PEDAL_MISMATCH_MAX)) command.flags |= FAULT_ACCEL_MISMATCH;
+    else command.flags &= ~FAULT_ACCEL_MISMATCH;
 	// Regen pot too low
 	if(analog_c < REGEN_ERROR_MIN) command.flags |= FAULT_REGEN_LOW;
 	else command.flags &= ~FAULT_REGEN_LOW;

@@ -53,7 +53,7 @@ extern command_variables command;
 // Analog pedal input scaling
 // Single input channel only (no redundancy)
 // Channel A = 0.00 to 5.00 Volts = 0 to 4096 counts
-// Channel B = Unused
+// Channel B = 0.00 to 5.00 Volts = 0 to 4096 counts
 #define HALL_PEDAL
 
 #define ADC_MAX					4096
@@ -68,9 +68,9 @@ extern command_variables command;
 #define PEDAL_TRAVEL			(PEDAL_TRAVEL_MAX - PEDAL_TRAVEL_MIN)
 #define PEDAL_ERROR_MIN			0
 #define PEDAL_ERROR_MAX			(ADC_MAX - 0)
-#define PEDAL_MISMATCH_MAX		100
+#define PEDAL_MISMATCH_MAX		400
 
-// Analog input for linear slider type pot for regenerative strenght control
+// Analog input for linear slider type pot for regenerative strength control
 // Channel C = 0.00 to 5.00 Volts = 0 to 4096 counts
 #define REGEN_TRAVEL_MIN		200
 #define REGEN_TRAVEL_MAX		(ADC_MAX - 200)
