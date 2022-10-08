@@ -50,25 +50,41 @@ command_variables	command;
  */
 void process_pedal( unsigned int analog_a, unsigned int analog_b, unsigned int analog_c, unsigned char request_regen )
 {
+    //APPS1 = Analog_a (Pedal A)
+    //APPS2 = Analog_b (Pedal B)
+    //temp_Analog_a is a temporary variable holding the value of analog_a.
+    //This is done to make sure that the value between the two are the same
+    int temp_Analog_a = analog_a + 3.388;
+
+
 	float pedal, regen;
 	
 	// Error Flag updates
 	// Pedal too low
-	if(analog_a < PEDAL_ERROR_MIN) command.flags |= FAULT_ACCEL_LOW;
+	if(temp_Analog_a < PEDAL_ERROR_MIN) command.flags |= FAULT_ACCEL_LOW;
 	else command.flags &= ~FAULT_ACCEL_LOW;
 	// Pedal too high
-	if(analog_a > PEDAL_ERROR_MAX) command.flags |= FAULT_ACCEL_HIGH;
+	if(temp_Analog_a > PEDAL_ERROR_MAX) command.flags |= FAULT_ACCEL_HIGH;
 	else command.flags &= ~FAULT_ACCEL_HIGH;
 	// Pedal A & B mismatch
-    if((analog_a > analog_b + PEDAL_MISMATCH_MAX) || (analog_a < analog_b - PEDAL_MISMATCH_MAX)) command.flags |= FAULT_ACCEL_MISMATCH;
+    if((temp_Analog_a > (int)1.1*analog_b ) || (temp_Analog_a < (int)0.9*analog_b)) command.flags |= FAULT_ACCEL_MISMATCH;
+    else command.flags &= ~FAULT_ACCEL_MISMATCH;
+    if((analog_b > (int)1.1*temp_Analog_a) || (analog_b < (int)0.9*temp_Analog_a)) command.flags |= FAULT_ACCEL_MISMATCH;
     else command.flags &= ~FAULT_ACCEL_MISMATCH;
 	// Regen pot too low
-	if(analog_c < REGEN_ERROR_MIN) command.flags |= FAULT_REGEN_LOW;
-	else command.flags &= ~FAULT_REGEN_LOW;
+	if(analog_c < REGEN_ERROR_MIN) command.flags |= FAULT_BRAKE_LOW;
+	else command.flags &= ~FAULT_BRAKE_LOW;
 	// Pedal too high
-	if(analog_c > REGEN_ERROR_MAX) command.flags |= FAULT_REGEN_HIGH;
-	else command.flags &= ~FAULT_REGEN_HIGH;
-	
+	if(analog_c > REGEN_ERROR_MAX) command.flags |= FAULT_BRAKE_HIGH;
+	else command.flags &= ~FAULT_BRAKE_HIGH;
+    //Plausibility Check
+    if(analog_a > (0.25*ADC_MAX) && analog_c > REGEN_TRAVEL_MIN) command.flags |= FAULT_PLAUSIBILITY_CHECK;
+    else if((command.flags |= FAULT_PLAUSIBILITY_CHECK) && (analog_a == 0)) command.flags &= ~FAULT_PLAUSIBILITY_CHECK;
+
+
+
+
+
 	
 	// Run command calculations only if there are no pedal faults detected
 	if(command.flags == 0x00){
