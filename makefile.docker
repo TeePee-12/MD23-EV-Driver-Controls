@@ -22,7 +22,7 @@ all: $(PROJECT_NAME).deps $(PROJECT_NAME).a43 $(PROJECT_NAME).lst $(PROJECT_NAME
 	$(CC) -MM $(CFLAGS) $(SOURCES) > $(OUTPUT_PATH)$@
 
 %.tsf: %.a43
-	msp430-encrypt-public $(OUTPUT_PATH)$^ $(OUTPUT_PATH)$@ 0x00001002 4
+	msp430-encrypt-public $(OUTPUT_PATH)$^ $(OUTPUT_PATH)$@ 0x00001F86 4
 
 %.a43: %.elf
 	msp430-objcopy -O ihex $(OUTPUT_PATH)$^ $(OUTPUT_PATH)$@
