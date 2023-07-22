@@ -1,6 +1,6 @@
 /*
  * Tritium MCP2515 CAN Interface
- * Copyright (c) 2015, Tritium Pty Ltd.  All rights reserved.
+ * Copyright (c) 2011, Tritium Pty Ltd.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification, 
  * are permitted provided that the following conditions are met:
@@ -35,17 +35,6 @@ can_variables *can_push_ptr;
 unsigned char buffer[16];
 can_variables *can_pop_ptr;
 
-// Private function prototypes
-void 					can_reset( void );
-void 					can_read( unsigned char address, unsigned char *ptr, unsigned char bytes );
-void 					can_read_rx( unsigned char address, unsigned char *ptr );
-void 					can_write( unsigned char address, unsigned char *ptr, unsigned char bytes );
-void 					can_write_tx( unsigned char address, unsigned char *ptr );
-void 					can_rts( unsigned char address );
-unsigned char 			can_read_status( void );
-unsigned char 			can_read_filter( void );
-void 					can_mod( unsigned char address, unsigned char mask, unsigned char data );
-
 /**************************************************************************************************
  * PUBLIC FUNCTIONS
  *************************************************************************************************/
@@ -73,8 +62,7 @@ void can_init( unsigned int bitrate_index )
 	can_mod( CANCTRL, 0x03, 0x00 );			// CANCTRL register, modify lower 2 bits, CLK = /1 = 16 MHz
 	
 	// Set up bit timing
-	switch(bitrate_index)
-	{
+	switch(bitrate_index){
 		case CAN_BITRATE_50:
 			buffer[0] = 0x05;
 			buffer[1] = 0xF8;
@@ -121,7 +109,7 @@ void can_init( unsigned int bitrate_index )
 	buffer[ 3] = 0x00;
 	// RXF1 - Buffer 0
 	buffer[ 4] = (unsigned char)(RX_ID_0B >> 3);
-	buffer[ 5] = (unsigned char)(RX_ID_0B << 5);
+	buffer[ 5] = (unsigned char)(RX_ID_0B >> 3);
 	buffer[ 6] = 0x00;
 	buffer[ 7] = 0x00;
 	// RXF2 - Buffer 1
@@ -180,8 +168,7 @@ void can_receive( void )
 	// Read out the interrupt flags register
 	can_read( CANINTF, &flags, 1 );
 	// Check for errors
-	if (( flags & MCP_IRQ_ERR ) != 0x00 )
-	{
+	if(( flags & MCP_IRQ_ERR ) != 0x00 ){
 		// Read error flags and counters
 		can_read( EFLAG, &buffer[0], 1 );
 		can_read( TEC, &buffer[1], 2 );
@@ -198,14 +185,12 @@ void can_receive( void )
 		can_mod( CANINTF, MCP_IRQ_ERR, 0x00 );
 	}	
 	// No error, check for received messages, buffer 0
-	else if (( flags & MCP_IRQ_RXB0 ) != 0x00 )
-	{
+	else if(( flags & MCP_IRQ_RXB0 ) != 0x00 ){
 		// Read in the info, address & message data
 		can_read( RXB0CTRL, &buffer[0], 14 );
 		// Fill out return structure
 		// check for Remote Frame requests and indicate the status correctly
-		if (( buffer[0] & MCP_RXB0_RTR ) == 0x00 )
-		{
+		if(( buffer[0] & MCP_RXB0_RTR ) == 0x00 ){
 			// We've received a standard data packet
 			can.status = CAN_OK;
 			// Fill in the data
@@ -218,8 +203,7 @@ void can_receive( void )
 			can.data.data_u8[6] = buffer[12];
 			can.data.data_u8[7] = buffer[13];
 		}
-		else
-		{
+		else{
 			// We've received a remote frame request
 			// Data is irrelevant with an RTR
 			can.status = CAN_RTR;
@@ -233,14 +217,12 @@ void can_receive( void )
 		can_mod( CANINTF, MCP_IRQ_RXB0, 0x00 );
 	}
 	// No error, check for received messages, buffer 1
-	else if (( flags & MCP_IRQ_RXB1 ) != 0x00 )
-	{
+	else if(( flags & MCP_IRQ_RXB1 ) != 0x00 ){
 		// Read in the info, address & message data
 		can_read( RXB1CTRL, &buffer[0], 14 );
 		// Fill out return structure
 		// check for Remote Frame requests and indicate the status correctly
-		if (( buffer[0] & MCP_RXB1_RTR ) == 0x00 )
-		{
+		if(( buffer[0] & MCP_RXB1_RTR ) == 0x00 ){
 			// We've received a standard data packet
 			can.status = CAN_OK;
 			// Fill in the data
@@ -253,8 +235,7 @@ void can_receive( void )
 			can.data.data_u8[6] = buffer[12];
 			can.data.data_u8[7] = buffer[13];
 		}
-		else
-		{
+		else{
 			// We've received a remote frame request
 			// Data is irrelevant with an RTR
 			can.status = CAN_RTR;
@@ -268,8 +249,7 @@ void can_receive( void )
 		can_mod( CANINTF, MCP_IRQ_RXB1, 0x00 );
 	}
 	// Check for wakeup events
-	else if (( flags & MCP_IRQ_WAKE ) != 0x00 )
-	{
+	else if(( flags & MCP_IRQ_WAKE ) != 0x00 ){
 		// Clear the IRQ flag
 		can_mod( CANINTF, MCP_IRQ_WAKE, 0x00 );
 		// Signal the event
@@ -277,8 +257,7 @@ void can_receive( void )
 		can.address = 0x0002;
 	}
 	// Else, spurious interrupt, signal an error
-	else
-	{
+	else{
 		can.status = CAN_ERROR;
 		can.address = 0x0001;
 		can.data.data_u8[0] = flags;		// CANINTF
@@ -302,15 +281,12 @@ void can_receive( void )
 char can_transmit( void )
 {
 	// Check Queue
-	if ( can_push_ptr != can_pop_ptr )
-	{
+	if( can_push_ptr != can_pop_ptr ){
 		// Check for mailbox 1 busy
-		if (( can_read_status() & 0x04 ) == 0x04)
-		{
+		if(( can_read_status() & 0x04 ) == 0x04){
 			return(-1);
 		}
-		else
-		{
+		else{
 			// Format the data for the CAN controller
 			buffer[ 0] = (unsigned char)(can_pop_ptr->address >> 3);
 			buffer[ 1] = (unsigned char)(can_pop_ptr->address << 5);
@@ -330,12 +306,11 @@ char can_transmit( void )
 			can_rts( 0 );
 			// Deal with queue
 			can_pop_ptr++;
-			if (can_pop_ptr == ( canq + CAN_BUF_LEN )) can_pop_ptr = canq;
+			if(can_pop_ptr == ( canq + CAN_BUF_LEN )) can_pop_ptr = canq;
 			return(1);
 		}
 	}
-	else
-	{
+	else{
 		// No data to transmit
 		return(-3);
 	}
@@ -347,7 +322,7 @@ char can_transmit( void )
 void can_push( void )
 {
 	can_push_ptr++;
-	if (can_push_ptr == ( canq + CAN_BUF_LEN )) can_push_ptr = canq;
+	if(can_push_ptr == ( canq + CAN_BUF_LEN )) can_push_ptr = canq;
 }
 
 
@@ -374,8 +349,7 @@ void can_sleep( void )
 	can_mod( CANCTRL, 0xE0, 0x20 );			// CANCTRL register, modify upper 3 bits, mode = Sleep
 
 	// Wait until actually in sleep mode
-	while((status & 0xE0) != 0x20)
-	{
+	while((status & 0xE0) != 0x20){
 		// Read out the status register
 		can_read( CANSTAT, &status, 1 );
 	}
@@ -440,17 +414,13 @@ void can_read_rx( unsigned char address, unsigned char *ptr )
 	can_select;
 	usci_transmit( address );
 	
-	if (( address & 0x02 ) == 0x00 )
-	{		// Start at address registers
-		for( i = 0; i < 13; i++ )
-		{
+	if(( address & 0x02 ) == 0x00 ){		// Start at address registers
+		for( i = 0; i < 13; i++ ){
 			*ptr++ = usci_exchange( 0x00 );
 		}
 	}
-	else
-	{									// Start at data registers
-		for( i = 0; i < 8; i++ )
-		{
+	else{									// Start at data registers
+		for( i = 0; i < 8; i++ ){
 			*ptr++ = usci_exchange( 0x00 );
 		}
 	}
@@ -468,8 +438,7 @@ void can_write( unsigned char address, unsigned char *ptr, unsigned char bytes )
 	can_select;
 	usci_transmit( MCP_WRITE );
 	usci_transmit( address );
-	for( i = 0; i < (bytes-1); i++ )
-	{
+	for( i = 0; i < (bytes-1); i++ ){
 		usci_transmit( *ptr++ );
 	}
 	usci_transmit( *ptr );
@@ -492,17 +461,13 @@ void can_write_tx( unsigned char address, unsigned char *ptr )
 	can_select;
 	usci_transmit( address );
 	
-	if (( address & 0x01 ) == 0x00 )
-	{		// Start at address registers
-		for( i = 0; i < 13; i++ )
-		{
+	if(( address & 0x01 ) == 0x00 ){		// Start at address registers
+		for( i = 0; i < 13; i++ ){
 			usci_transmit( *ptr++ );
 		}
 	}
-	else
-	{									// Start at data registers
-		for( i = 0; i < 8; i++ )
-		{
+	else{									// Start at data registers
+		for( i = 0; i < 8; i++ ){
 			usci_transmit( *ptr++ );
 		}
 	}
@@ -519,9 +484,9 @@ void can_rts( unsigned char address )
 	
 	// Set up address bits in command byte
 	i = MCP_RTS;
-	if ( address == 0 ) i |= 0x01;
-	else if ( address == 1 ) i |= 0x02;
-	else if ( address == 2 ) i |= 0x04;
+	if( address == 0 ) i |= 0x01;
+	else if( address == 1 ) i |= 0x02;
+	else if( address == 2 ) i |= 0x04;
 	
 	// Write command
 	can_select;
