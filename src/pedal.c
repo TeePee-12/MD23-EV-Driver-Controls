@@ -1,6 +1,6 @@
 /*
  * Tritium pedal Interface
- * Copyright (c) 2010, Tritium Pty Ltd.  All rights reserved.
+ * Copyright (c) 2015, Tritium Pty Ltd.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification, 
  * are permitted provided that the following conditions are met:
@@ -50,53 +50,78 @@ command_variables	command;
  */
 void process_pedal( unsigned int analog_a, unsigned int analog_b, unsigned int analog_c, unsigned char request_regen )
 {
-	float pedal, regen;
+	float pedal, regen, rpm;
 	
 	// Error Flag updates
 	// Pedal too low
-	if(analog_a < PEDAL_ERROR_MIN) command.flags |= FAULT_ACCEL_LOW;
+	if (analog_a < PEDAL_ERROR_MIN) command.flags |= FAULT_ACCEL_LOW;
 	else command.flags &= ~FAULT_ACCEL_LOW;
 	// Pedal too high
-	if(analog_a > PEDAL_ERROR_MAX) command.flags |= FAULT_ACCEL_HIGH;
+	if (analog_a > PEDAL_ERROR_MAX) command.flags |= FAULT_ACCEL_HIGH;
 	else command.flags &= ~FAULT_ACCEL_HIGH;
 	// Pedal A & B mismatch
 	// not implemented...
 	// Regen pot too low
-	if(analog_c < REGEN_ERROR_MIN) command.flags |= FAULT_REGEN_LOW;
+	if (analog_c < REGEN_ERROR_MIN) command.flags |= FAULT_REGEN_LOW;
 	else command.flags &= ~FAULT_REGEN_LOW;
 	// Pedal too high
-	if(analog_c > REGEN_ERROR_MAX) command.flags |= FAULT_REGEN_HIGH;
+	if (analog_c > REGEN_ERROR_MAX) command.flags |= FAULT_REGEN_HIGH;
 	else command.flags &= ~FAULT_REGEN_HIGH;
 	
 	
 	// Run command calculations only if there are no pedal faults detected
-	if(command.flags == 0x00){
+	if (command.flags == 0x00)
+	{
 		// Scale pedal input to a 0.0 to CURRENT_MAX range
 		// Clip lower travel region of pedal input
-		if(analog_a > PEDAL_TRAVEL_MIN) pedal = (analog_a - PEDAL_TRAVEL_MIN);
+		if (analog_a > PEDAL_TRAVEL_MIN) pedal = (analog_a - PEDAL_TRAVEL_MIN);
 		else pedal = 0.0;
 		// Scale pedal input to produce target motor current
 		pedal = pedal * CURRENT_MAX / PEDAL_TRAVEL;
 		// Check limits and clip upper travel region
-		if(pedal > CURRENT_MAX) pedal = CURRENT_MAX;
-		
+		if (pedal > CURRENT_MAX) pedal = CURRENT_MAX;
+
+#ifndef REGEN_SETS_RPM
 		// Scale regen input to a 0.0 to REGEN_MAX range
 		// Clip lower travel region of regen input
-		if(analog_c > REGEN_TRAVEL_MIN) regen = (analog_c - REGEN_TRAVEL_MIN);
+		if (analog_c > REGEN_TRAVEL_MIN) regen = (analog_c - REGEN_TRAVEL_MIN);
 		else regen = 0.0;
 		// Scale regen input
 		regen = regen * REGEN_MAX / REGEN_TRAVEL;
 		// Check limits and clip upper travel region
-		if(regen > REGEN_MAX) regen = REGEN_MAX;
+		if (regen > REGEN_MAX) regen = REGEN_MAX;
+		rpm = 0.0;
+#else
+		// Scale regen input to a 0.0 to RPM_MAX (direction dependent) range
+		// Clip lower travel region of regen input
+		if (analog_c > REGEN_TRAVEL_MIN) rpm = (analog_c - REGEN_TRAVEL_MIN);
+		else rpm = 0.0;
+		// Check direction and scale appropriately
+		if (command.state == MODE_R)
+		{
+			rpm = rpm * RPM_REV_MAX / REGEN_TRAVEL;
+			if (rpm < RPM_REV_MAX) rpm = RPM_REV_MAX;
+		}
+		else
+		{
+			rpm = rpm * RPM_FWD_MAX / REGEN_TRAVEL;
+			if (rpm > RPM_FWD_MAX) rpm = RPM_FWD_MAX;
+		}
+		regen = 0.0;
+#endif
 		
+#ifndef REGEN_SETS_RPM
 		// Choose target motor velocity
-		switch(command.state){
+		switch(command.state)
+		{
 			case MODE_R:
-				if( request_regen == FALSE ){
+				if ( request_regen == FALSE )
+				{
 					command.current = pedal;
 					command.rpm = RPM_REV_MAX;
 				}
-				else{
+				else
+				{
 					command.current = regen;
 					command.rpm = 0.0;
 				}
@@ -105,11 +130,13 @@ void process_pedal( unsigned int analog_a, unsigned int analog_b, unsigned int a
 			case MODE_DH:
 			case MODE_BL:
 			case MODE_BH:
-				if( request_regen == FALSE ){
+				if ( request_regen == FALSE )
+				{
 					command.current = pedal;
 					command.rpm = RPM_FWD_MAX;
 				}
-				else{
+				else
+				{
 					command.current = regen;
 					command.rpm = 0.0;
 				}
@@ -125,9 +152,35 @@ void process_pedal( unsigned int analog_a, unsigned int analog_b, unsigned int a
 				break;
 		}
 	}
+#else
+		// Choose target motor velocity
+		switch(command.state)
+		{
+			case MODE_R:
+			case MODE_DL:
+			case MODE_DH:
+			case MODE_BL:
+			case MODE_BH:
+				command.current = pedal;
+				command.rpm = rpm;
+				break;
+			case MODE_CHARGE:
+			case MODE_N:
+			case MODE_START:
+			case MODE_ON:
+			case MODE_OFF:
+			default:
+				command.current = 0.0;
+				command.rpm = 0.0;
+				break;
+		}
+	}
+#endif
 	// There was a pedal fault detected
-	else{
+	else
+	{
 		command.current = 0.0;
 		command.rpm = 0.0;
 	}
+
 }

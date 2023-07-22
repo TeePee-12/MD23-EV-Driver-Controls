@@ -1,6 +1,6 @@
 /*
  * Tritium gauge driver Interface
- * Copyright (c) 2010, Tritium Pty Ltd.  All rights reserved.
+ * Copyright (c) 2015, Tritium Pty Ltd.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification, 
  * are permitted provided that the following conditions are met:
@@ -50,7 +50,10 @@ void gauge_init( void )
 	gauge.g2_count = 0;
 	gauge.g3_duty = 0;
 	gauge.g4_duty = 0;
-	events |= (EVENT_GAUGE1 | EVENT_GAUGE2 | EVENT_GAUGE3 | EVENT_GAUGE4);
+	EVENT_GAUGE1_SET;
+	EVENT_GAUGE2_SET;
+	EVENT_GAUGE3_SET;
+	EVENT_GAUGE4_SET;
 }
 
 /*
@@ -58,15 +61,17 @@ void gauge_init( void )
  */
 void gauge_tach_update( float motor_rpm )
 {
-	if( motor_rpm < 0) motor_rpm = motor_rpm * -1;
-	if( motor_rpm > GAUGE1_MAX) motor_rpm = GAUGE1_MAX;
-	if( motor_rpm < GAUGE1_MIN){
+	if ( motor_rpm < 0) motor_rpm = motor_rpm * -1;
+	if ( motor_rpm > GAUGE1_MAX) motor_rpm = GAUGE1_MAX;
+	if ( motor_rpm < GAUGE1_MIN)
+	{
 		gauge.g1_count = 0;
 	}
-	else {
+	else
+	{
 		gauge.g1_count = (unsigned int)( ((float)GAUGE_FREQ * GAUGE1_SCALE) / motor_rpm );
 	}
-	events |= EVENT_GAUGE1;
+	EVENT_GAUGE1_SET;
 }
 
 /*
@@ -77,14 +82,16 @@ void gauge_power_update( float battery_voltage, float battery_current )
 	float temp;
 	
 	temp = battery_voltage * battery_current / 1000;
-	if( temp > GAUGE2_MAX) temp = GAUGE2_MAX;
-	if( temp < GAUGE2_MIN){
+	if ( temp > GAUGE2_MAX) temp = GAUGE2_MAX;
+	if ( temp < GAUGE2_MIN)
+	{
 		gauge.g2_count = 0;
 	}
-	else {
+	else
+	{
 		gauge.g2_count = (unsigned int)( ((float)GAUGE_FREQ * GAUGE2_SCALE) / temp );
 	}
-	events |= EVENT_GAUGE2;
+	EVENT_GAUGE2_SET;
 }
 
 /*
@@ -98,9 +105,9 @@ void gauge_temp_update( float motor_temp, float controller_temp )
 	// Scale for PWM output
 	temp = controller_temp * 1.33;	// Testing only
 	// Check limits
-	if(temp > GAUGE_PWM_PERIOD) temp = GAUGE_PWM_PERIOD;
+	if (temp > GAUGE_PWM_PERIOD) temp = GAUGE_PWM_PERIOD;
 	gauge.g3_duty = temp;
-	events |= EVENT_GAUGE3;
+	EVENT_GAUGE3_SET;
 }
 
 /*
@@ -113,8 +120,8 @@ void gauge_fuel_update( float battery_voltage )
 	// Scale for PWM output
 	temp = battery_voltage * 0.4;	// Testing only
 	// Check limits
-	if(temp > GAUGE_PWM_PERIOD) temp = GAUGE_PWM_PERIOD;
+	if (temp > GAUGE_PWM_PERIOD) temp = GAUGE_PWM_PERIOD;
 	gauge.g4_duty = temp;
-	events |= EVENT_GAUGE4;
+	EVENT_GAUGE4_SET;
 }
 

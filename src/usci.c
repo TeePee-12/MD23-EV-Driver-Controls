@@ -1,6 +1,6 @@
 /*
  * Tritium MSP430 2xx USCI SPI interface
- * Copyright (c) 2009, Tritium Pty Ltd.  All rights reserved.
+ * Copyright (c) 2015, Tritium Pty Ltd.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification, 
  * are permitted provided that the following conditions are met:
@@ -41,7 +41,7 @@ void usci_init( unsigned char clock )
 
 	P3SEL |= CAN_MOSI | CAN_MISO | CAN_SCLK;			// Set pins to peripheral function, not GPIO
 	UCB0CTL0 |= UCMST | UCSYNC | UCCKPL | UCMSB;		// 3-pin, 8-bit SPI master
-	if( clock == 0 ) UCB0CTL1 = UCSSEL_2 | UCSWRST;	// BRCLK = SMCLK
+	if ( clock == 0 ) UCB0CTL1 = UCSSEL_2 | UCSWRST;	// BRCLK = SMCLK
 	else UCB0CTL1 = UCSSEL_1 | UCSWRST;					// BRCLK = ACLK
 	UCB0BR0 = 0x02;										// /2
 	UCB0BR1 = 0;										//

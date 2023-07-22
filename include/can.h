@@ -1,6 +1,6 @@
 /*
  * Tritium MCP2515 CAN interface header
- * Copyright (c) 2011, Tritium Pty Ltd.  All rights reserved.
+ * Copyright (c) 2015, Tritium Pty Ltd.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification, 
  * are permitted provided that the following conditions are met:
@@ -20,14 +20,19 @@
  *
  */
 
+#ifndef CAN_H
+#define CAN_H
+
+#include "tri86.h"
+
 // Public function prototypes
-extern void	can_init( unsigned int bitrate_index );
-extern char	can_transmit( void );
-extern void	can_receive( void );
-extern void can_push( void );
-extern void can_abort_transmit( void );
-extern void can_sleep( void );
-extern void can_wake( void );
+void can_init( unsigned int bitrate_index );
+char can_transmit( void );
+void can_receive( void );
+void can_push( void );
+void can_abort_transmit( void );
+void can_sleep( void );
+void can_wake( void );
 
 // Public variables
 typedef struct _can_variables {
@@ -44,7 +49,7 @@ extern can_variables	*can_push_ptr;
 // Receive filters and masks
 // Receive buffer 0, can choose two different receive blocks, with a single mask
 #define RX_MASK_0		0x07E0			// Only care about upper 6 bits of 11-bit address
-#define RX_ID_0A		DC_CAN_BASE		// Receive driver controls (ourself) packets, for RTR and bootloader trigger
+#define RX_ID_0A		can_addr		// Receive driver controls (ourself) packets, for RTR and bootloader trigger
 #define RX_ID_0B		0x0000			// Unused
 // Receive buffer 1, can choose four different receive blocks, with a single mask
 #define RX_MASK_1		0x07E0			// Only care about upper 6 bits of 11-bit address
@@ -52,17 +57,6 @@ extern can_variables	*can_push_ptr;
 #define RX_ID_1B		EG_CAN_BASE		// Receive packets from eGear (series/parallel switch) controller
 #define RX_ID_1C		0x0000			// Unused
 #define RX_ID_1D		0x0000			// Unused
-
-// Private function prototypes
-void 					can_reset( void );
-void 					can_read( unsigned char address, unsigned char *ptr, unsigned char bytes );
-void 					can_read_rx( unsigned char address, unsigned char *ptr );
-void 					can_write( unsigned char address, unsigned char *ptr, unsigned char bytes );
-void 					can_write_tx( unsigned char address, unsigned char *ptr );
-void 					can_rts( unsigned char address );
-unsigned char 			can_read_status( void );
-unsigned char 			can_read_filter( void );
-void 					can_mod( unsigned char address, unsigned char mask, unsigned char data );
 
 // SPI port interface macros
 #define can_select		P3OUT &= ~CAN_CSn
@@ -95,29 +89,13 @@ void 					can_mod( unsigned char address, unsigned char mask, unsigned char data
 
 // Driver controls CAN base address and packet offsets
 #define DC_CAN_BASE		0x500
-#define DC_DRIVE		1
-#define DC_POWER		2
-#define DC_RESET		3
-#define DC_SWITCH		5
-#define DC_BOOTLOAD		22
-
-// Driver controls switch position packet bitfield positions (lower 16 bits)
-#define SW_MODE_R		0x0001
-#define SW_MODE_N		0x0002
-#define SW_MODE_B		0x0004
-#define SW_MODE_D		0x0008
-#define SW_IGN_ACC		0x0010
-#define SW_IGN_ON		0x0020
-#define SW_IGN_START	0x0040
-#define SW_BRAKE		0x0080
-#define SW_FUEL			0x0100
-#define SW_SPARE1		0x0200
-#define SW_SPARE2		0x0400
-#define SW_SPARE3		0x0800
-#define SW_ACCEL_FAULT	0x1000
-#define SW_CAN_FAULT	0x2000
-#define SW_BRAKE_FAULT	0x4000
-#define SW_REV_FAULT	0x8000
+#define DC_DRIVE		0x001
+#define DC_POWER		0x002
+#define DC_RESET		0x003
+#define DC_SWITCH		0x005
+#define DC_INFO			0x006		//LEGACY SUPPORT ONLY
+#define DC_BOOTLOAD		0x016
+#define DC_SETUP		0x01F
 
 // Low / high egear switch CAN base address and packet offsets
 #define EG_CAN_BASE		0x580
@@ -287,3 +265,5 @@ void 					can_mod( unsigned char address, unsigned char mask, unsigned char data
 #define MCP_IRQ_TXB0	0x04
 #define MCP_IRQ_RXB1	0x02
 #define MCP_IRQ_RXB0	0x01
+
+#endif	// CAN_H

@@ -1,6 +1,6 @@
 /*
- * Tritium TRI86 EV Driver Controls, version 3 hardware
- * Copyright (c) 2010, Tritium Pty Ltd.  All rights reserved.
+ * Tritium TRI86 EV Driver Controls, up to v4 hardware
+ * Copyright (c) 2015, Tritium Pty Ltd.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification, 
  * are permitted provided that the following conditions are met:
@@ -28,6 +28,10 @@
 #include "usci.h"
 #include "pedal.h"
 #include "gauge.h"
+#include "switch.h"
+#include "variant.h"
+#include "buildnum.h"
+#include "flash.h"
 
 // Function prototypes
 void clock_init( void );
@@ -35,12 +39,12 @@ void io_init( void );
 void timerA_init( void );
 void timerB_init( void );
 void adc_init( void );
-static void __inline__ brief_pause(register unsigned int n);
-void update_switches( unsigned int *state, unsigned int *difference);
 
 // Global variables
 // Status and event flags
 volatile unsigned int events = 0x0000;
+//Copy of flash.can_id. Loaded only at startup -- So if CAN address changed, only used after save&reboot
+unsigned int can_addr;
 
 // Data from motor controller
 float motor_rpm = 0;
@@ -49,21 +53,20 @@ float controller_temp = 0;
 float battery_voltage = 0;
 float battery_current = 0;
 
+//For detecting CAN devices in BL (This is required to ignore another device whilst it is being programmed)
+BOOL inblWS = FALSE;
+
 // Main routine
 int main( void )
 { 
 	// Local variables
-	// Switch inputs - same bitfield positions as CAN packet spec
-	unsigned int switches = 0x0000;
-	unsigned int switches_diff = 0x0000;
+	// State machine variables
 	unsigned char next_state = MODE_OFF;
 	unsigned char current_egear = EG_STATE_NEUTRAL;
 	// Comms
 	unsigned int comms_event_count = 0;
 	// LED flashing
 	unsigned char charge_flash_count = CHARGE_FLASH_SPEED;
-	// Debug
-	unsigned int i;
 	
 	// Stop watchdog timer
 	WDTCTL = WDTPW + WDTHOLD;
@@ -71,20 +74,36 @@ int main( void )
 	// Initialise I/O ports
 	io_init();
 
-	// Wait a bit for clocks etc to stabilise, and power to come up for external devices
-	// MSP430 starts at 1.8V, CAN controller need 3.3V
-	for(i = 0; i < 10000; i++) brief_pause(10);
-
 	// Initialise clock module - internal osciallator
 	clock_init();
+
+	// Fetch hardware info
+	variant_retreive_hware();
+
+	// Set up flash timing
+	flash_init();
+
+	// Read in constants from flash
+	flash_read((unsigned char *)(&flash), sizeof(flash));
+
+	// Check if flash has been programmed, if not, switch to calibration mode - this will send raw ADC counts
+	if ((flash.serial == 0xFFFFFFFF) || (flash.serial == 0x00000000) || (flash.can_id > 0x07E0))
+	{
+		can_addr = flash.can_id = DC_CAN_BASE;
+		flash.can_bitrate = CAN_BITRATE_500;
+	}
+	else
+	{
+		can_addr = flash.can_id;
+	}
 
 	// Initialise SPI port for CAN controller (running with SMCLK)
 	usci_init(0);
 	
 	// Reset CAN controller and initialise
 	// This also changes the clock output from the MCP2515, but we're not using it in this software
-	can_init( CAN_BITRATE_500 );
-	events |= EVENT_CONNECTED;
+	can_init( flash.can_bitrate );
+	EVENT_CONNECTED_SET;
 
 	// Initialise Timer A (10ms timing ticks)
 	timerA_init();
@@ -95,8 +114,8 @@ int main( void )
 	// Initialise A/D converter for potentiometer and current sense inputs
 	adc_init();
 
-	// Initialise switch & encoder positions
-	update_switches(&switches, &switches_diff);
+	// Initialise switch positions
+	switch_init( &switches );
 	
 	// Initialise command state
 	command.rpm = 0.0;
@@ -112,18 +131,25 @@ int main( void )
 	eint();
 
 	// Check switch inputs and generate command packets to motor controller
-	while(TRUE){
+	while (TRUE)
+	{
 		// Process CAN transmit queue
 		can_transmit();
 
-		// Monitor switch positions & analog inputs
-		if( events & EVENT_TIMER ){
-			events &= ~EVENT_TIMER;			
-			ADC12CTL0 |= ADC12SC;               	// Start A/D conversions
+		// Trigger ADC conversions (100Hz)
+		if ( EVENT_TIMER_ACTIVE )
+		{
+			// Clear flag
+			EVENT_TIMER_CLR;			
+			// Start A/D conversions
+			ADC12CTL0 |= ADC12SC;
 		}
 
-		if( events & EVENT_ADC ){
-			events &= ~EVENT_ADC;
+		// ADC conversion complete, process results
+		if ( EVENT_ADC_ACTIVE )
+		{
+			// Clear flag
+			EVENT_ADC_CLR;
 			// Check for 5V pedal supply errors
 			// TODO
 			// Check for overcurrent errors on 12V outputs
@@ -133,29 +159,29 @@ int main( void )
 			process_pedal( ADC12MEM0, ADC12MEM1, ADC12MEM2, (switches & SW_BRAKE) );	// Request regen on brake switch
 #else
 			process_pedal( ADC12MEM0, ADC12MEM1, ADC12MEM2, FALSE );					// No regen
-#endif
-			
+#endif			
 			// Update current state of the switch inputs
-			update_switches(&switches, &switches_diff);
+			switch_update( &switches );
 			
 			// Track current operating state
-			switch(command.state){
+			switch(command.state)
+			{
 				case MODE_OFF:
-					if(switches & SW_IGN_ON) next_state = MODE_N;
+					if (switches & SW_IGN_ON) next_state = MODE_N;
 					else next_state = MODE_OFF;
 					P5OUT &= ~(LED_GEAR_ALL);
 					break;
 				case MODE_N:
 #ifndef USE_EGEAR
-					if((switches & SW_MODE_R) && ((events & EVENT_SLOW) || (events & EVENT_REVERSE))) next_state = MODE_R;
-					else if((switches & SW_MODE_B) && ((events & EVENT_SLOW) || (events & EVENT_FORWARD))) next_state = MODE_BL;
-					else if((switches & SW_MODE_D) && ((events & EVENT_SLOW) || (events & EVENT_FORWARD))) next_state = MODE_DL;
+					if ((switches & SW_MODE_R) && ((EVENT_SLOW_ACTIVE) || (EVENT_REVERSE_ACTIVE))) next_state = MODE_R;
+					else if ((switches & SW_MODE_B) && ((EVENT_SLOW_ACTIVE) || (EVENT_FORWARD_ACTIVE))) next_state = MODE_BL;
+					else if ((switches & SW_MODE_D) && ((EVENT_SLOW_ACTIVE) || (EVENT_FORWARD_ACTIVE))) next_state = MODE_DL;
 #else
-					if((switches & SW_MODE_R) && ((events & EVENT_SLOW) || (events & EVENT_REVERSE))) next_state = MODE_CO_R;
-					else if ( (switches & SW_MODE_B) && ( (events & EVENT_SLOW) || (!(events & EVENT_OVER_VEL_LTOH) && (events & EVENT_FORWARD)) ) ) next_state = MODE_CO_BL;
-					else if ( (switches & SW_MODE_B) && ( ((events & EVENT_OVER_VEL_HTOL) && (events & EVENT_FORWARD)) ) ) next_state = MODE_CO_BH;
-					else if ( (switches & SW_MODE_D) && ( (events & EVENT_SLOW) || (!(events & EVENT_OVER_VEL_LTOH) && (events & EVENT_FORWARD)) ) ) next_state = MODE_CO_DL;
-					else if ( (switches & SW_MODE_D) && ( ((events & EVENT_OVER_VEL_HTOL) && (events & EVENT_FORWARD)) ) ) next_state = MODE_CO_DH;
+					if ((switches & SW_MODE_R) && ((EVENT_SLOW_ACTIVE) || (EVENT_REVERSE_ACTIVE))) next_state = MODE_CO_R;
+					else if ( (switches & SW_MODE_B) && ( (EVENT_SLOW_ACTIVE) || (!(EVENT_OVER_VEL_LTOH_ACTIVE) && (EVENT_FORWARD_ACTIVE)) ) ) next_state = MODE_CO_BL;
+					else if ( (switches & SW_MODE_B) && ( ((EVENT_OVER_VEL_HTOL_ACTIVE) && (EVENT_FORWARD_ACTIVE)) ) ) next_state = MODE_CO_BH;
+					else if ( (switches & SW_MODE_D) && ( (EVENT_SLOW_ACTIVE) || (!(EVENT_OVER_VEL_LTOH_ACTIVE) && (EVENT_FORWARD_ACTIVE)) ) ) next_state = MODE_CO_DL;
+					else if ( (switches & SW_MODE_D) && ( ((EVENT_OVER_VEL_HTOL_ACTIVE) && (EVENT_FORWARD_ACTIVE)) ) ) next_state = MODE_CO_DH;
 #endif
 					else if (!(switches & SW_IGN_ON)) next_state = MODE_OFF;
 					else if (switches & SW_FUEL) next_state = MODE_CHARGE;
@@ -168,20 +194,20 @@ int main( void )
 				case MODE_CO_BH:
 				case MODE_CO_DL:
 				case MODE_CO_DH:
-					if(switches & SW_MODE_N) next_state = MODE_N;
-					else if((command.state == MODE_CO_R) && (current_egear == EG_STATE_LOW)) next_state = MODE_R;
-					else if((command.state == MODE_CO_BL) && (current_egear == EG_STATE_LOW)) next_state = MODE_BL;
-					else if((command.state == MODE_CO_BH) && (current_egear == EG_STATE_HIGH)) next_state = MODE_BH;
-					else if((command.state == MODE_CO_DL) && (current_egear == EG_STATE_LOW)) next_state = MODE_DL;
-					else if((command.state == MODE_CO_DH) && (current_egear == EG_STATE_HIGH)) next_state = MODE_DH;
+					if (switches & SW_MODE_N) next_state = MODE_N;
+					else if ((command.state == MODE_CO_R) && (current_egear == EG_STATE_LOW)) next_state = MODE_R;
+					else if ((command.state == MODE_CO_BL) && (current_egear == EG_STATE_LOW)) next_state = MODE_BL;
+					else if ((command.state == MODE_CO_BH) && (current_egear == EG_STATE_HIGH)) next_state = MODE_BH;
+					else if ((command.state == MODE_CO_DL) && (current_egear == EG_STATE_LOW)) next_state = MODE_DL;
+					else if ((command.state == MODE_CO_DH) && (current_egear == EG_STATE_HIGH)) next_state = MODE_DH;
 					else if (!(switches & SW_IGN_ON)) next_state = MODE_OFF;
 					else if (switches & SW_FUEL) next_state = MODE_CHARGE;
 					else next_state = command.state;
 					break;
 				case MODE_R:
-					if(switches & SW_MODE_N) next_state = MODE_N;
-					else if((switches & SW_MODE_B) && ((events & EVENT_SLOW) || (events & EVENT_FORWARD))) next_state = MODE_BL;	// Assume already in low egear
-					else if((switches & SW_MODE_D) && ((events & EVENT_SLOW) || (events & EVENT_FORWARD))) next_state = MODE_DL;	// Assume already in low egear
+					if (switches & SW_MODE_N) next_state = MODE_N;
+					else if ((switches & SW_MODE_B) && ((EVENT_SLOW_ACTIVE) || (EVENT_FORWARD_ACTIVE))) next_state = MODE_BL;	// Assume already in low egear
+					else if ((switches & SW_MODE_D) && ((EVENT_SLOW_ACTIVE) || (EVENT_FORWARD_ACTIVE))) next_state = MODE_DL;	// Assume already in low egear
 					else if (!(switches & SW_IGN_ON)) next_state = MODE_OFF;
 					else if (switches & SW_FUEL) next_state = MODE_CHARGE;
 					else next_state = MODE_R;
@@ -189,11 +215,11 @@ int main( void )
 					P5OUT |= LED_GEAR_4;
 					break;
 				case MODE_BL:
-					if(switches & SW_MODE_N) next_state = MODE_N;
-					else if((switches & SW_MODE_R) && ((events & EVENT_SLOW) || (events & EVENT_REVERSE))) next_state = MODE_R;		// Assume already in low egear
-					else if((switches & SW_MODE_D) && ((events & EVENT_SLOW) || (events & EVENT_FORWARD))) next_state = MODE_DL;	// Assume already in low egear
+					if (switches & SW_MODE_N) next_state = MODE_N;
+					else if ((switches & SW_MODE_R) && ((EVENT_SLOW_ACTIVE) || (EVENT_REVERSE_ACTIVE))) next_state = MODE_R;		// Assume already in low egear
+					else if ((switches & SW_MODE_D) && ((EVENT_SLOW_ACTIVE) || (EVENT_FORWARD_ACTIVE))) next_state = MODE_DL;	// Assume already in low egear
 #ifdef USE_EGEAR
-					else if(events & EVENT_OVER_VEL_LTOH) next_state = MODE_CO_BH;
+					else if (EVENT_OVER_VEL_LTOH_ACTIVE) next_state = MODE_CO_BH;
 #endif
 					else if (!(switches & SW_IGN_ON)) next_state = MODE_OFF;
 					else if (switches & SW_FUEL) next_state = MODE_CHARGE;
@@ -202,10 +228,10 @@ int main( void )
 					P5OUT |= LED_GEAR_2;
 					break;
 				case MODE_BH:
-					if(switches & SW_MODE_N) next_state = MODE_N;
-					else if((switches & SW_MODE_D) && ((events & EVENT_SLOW) || (events & EVENT_FORWARD))) next_state = MODE_DH;
+					if (switches & SW_MODE_N) next_state = MODE_N;
+					else if ((switches & SW_MODE_D) && ((EVENT_SLOW_ACTIVE) || (EVENT_FORWARD_ACTIVE))) next_state = MODE_DH;
 #ifdef USE_EGEAR
-					else if(!(events & EVENT_OVER_VEL_HTOL)) next_state = MODE_CO_BL;
+					else if (!(EVENT_OVER_VEL_HTOL_ACTIVE)) next_state = MODE_CO_BL;
 #endif
 					else if (!(switches & SW_IGN_ON)) next_state = MODE_OFF;
 					else if (switches & SW_FUEL) next_state = MODE_CHARGE;
@@ -214,11 +240,11 @@ int main( void )
 					P5OUT |= LED_GEAR_2;
 					break;
 				case MODE_DL:
-					if(switches & SW_MODE_N) next_state = MODE_N;
-					else if((switches & SW_MODE_B) && ((events & EVENT_SLOW) || (events & EVENT_FORWARD))) next_state = MODE_BL;	// Assume already in low egear
-					else if((switches & SW_MODE_R) && ((events & EVENT_SLOW) || (events & EVENT_REVERSE))) next_state = MODE_R;		// Assume already in low egear
+					if (switches & SW_MODE_N) next_state = MODE_N;
+					else if ((switches & SW_MODE_B) && ((EVENT_SLOW_ACTIVE) || (EVENT_FORWARD_ACTIVE))) next_state = MODE_BL;	// Assume already in low egear
+					else if ((switches & SW_MODE_R) && ((EVENT_SLOW_ACTIVE) || (EVENT_REVERSE_ACTIVE))) next_state = MODE_R;		// Assume already in low egear
 #ifdef USE_EGEAR
-					else if(events & EVENT_OVER_VEL_LTOH) next_state = MODE_CO_DH;
+					else if (EVENT_OVER_VEL_LTOH_ACTIVE) next_state = MODE_CO_DH;
 #endif
 					else if (!(switches & SW_IGN_ON)) next_state = MODE_OFF;
 					else if (switches & SW_FUEL) next_state = MODE_CHARGE;
@@ -227,10 +253,10 @@ int main( void )
 					P5OUT |= LED_GEAR_1;
 					break;
 				case MODE_DH:
-					if(switches & SW_MODE_N) next_state = MODE_N;
-					else if((switches & SW_MODE_B) && ((events & EVENT_SLOW) || (events & EVENT_FORWARD))) next_state = MODE_BH;
+					if (switches & SW_MODE_N) next_state = MODE_N;
+					else if ((switches & SW_MODE_B) && ((EVENT_SLOW_ACTIVE) || (EVENT_FORWARD_ACTIVE))) next_state = MODE_BH;
 #ifdef USE_EGEAR
-					else if(!(events & EVENT_OVER_VEL_HTOL)) next_state = MODE_CO_DL;
+					else if (!(EVENT_OVER_VEL_HTOL_ACTIVE)) next_state = MODE_CO_DL;
 #endif
 					else if (!(switches & SW_IGN_ON)) next_state = MODE_OFF;
 					else if (switches & SW_FUEL) next_state = MODE_CHARGE;
@@ -239,17 +265,19 @@ int main( void )
 					P5OUT |= LED_GEAR_1;
 					break;
 				case MODE_CHARGE:
-					if(!(switches & SW_FUEL)) next_state = MODE_N;
+					if (!(switches & SW_FUEL)) next_state = MODE_N;
 					else if (!(switches & SW_IGN_ON)) next_state = MODE_OFF;
 					else next_state = MODE_CHARGE;
 					// Flash N LED in charge mode
 					charge_flash_count--;
 					P5OUT &= ~(LED_GEAR_4 | LED_GEAR_2 | LED_GEAR_1);
-					if(charge_flash_count == 0){
+					if (charge_flash_count == 0)
+					{
 						charge_flash_count = (CHARGE_FLASH_SPEED * 2);
 						P5OUT |= LED_GEAR_3;
 					}
-					else if(charge_flash_count == CHARGE_FLASH_SPEED){
+					else if (charge_flash_count == CHARGE_FLASH_SPEED)
+					{
 						P5OUT &= ~LED_GEAR_3;
 					}
 					break;
@@ -260,43 +288,49 @@ int main( void )
 			command.state = next_state;
 			
 			// Control brake lights
-			if((switches & SW_BRAKE) || (events & EVENT_REGEN)) P1OUT |= BRAKE_OUT;
+			if ((switches & SW_BRAKE) || (EVENT_REGEN_ACTIVE)) P1OUT |= BRAKE_OUT;
 			else P1OUT &= ~BRAKE_OUT;
 			
 			// Control reversing lights
-			if(command.state == MODE_R) P1OUT |= REVERSE_OUT;
+			if (command.state == MODE_R) P1OUT |= REVERSE_OUT;
 			else P1OUT &= ~REVERSE_OUT;
 			
-			// Control CAN bus and pedal sense power
-			if((switches & SW_IGN_ACC) || (switches & SW_IGN_ON)){
+			// Control CAN bus power
+			if ((switches & SW_IGN_ACC) || (switches & SW_IGN_ON) || (switches & SW_FUEL))
+			{
 				P1OUT |= CAN_PWR_OUT;
-				P6OUT |= ANLG_V_ENABLE;
 			}
-			else{
+			else
+			{
 				P1OUT &= ~CAN_PWR_OUT;
-				P6OUT &= ~ANLG_V_ENABLE;
-				events &= ~EVENT_CONNECTED;
+				EVENT_CONNECTED_CLR;
 			}
 
+			// Control accelerator pedal sense power
+			if ((switches & SW_IGN_ACC) || (switches & SW_IGN_ON)) P6OUT |= ANLG_V_ENABLE;
+			else P6OUT &= ~ANLG_V_ENABLE;
+
 			// Control gear switch backlighting
-			if((switches & SW_IGN_ACC) || (switches & SW_IGN_ON)) P5OUT |= LED_GEAR_BL;
+			if ((switches & SW_IGN_ACC) || (switches & SW_IGN_ON)) P5OUT |= LED_GEAR_BL;
 			else P5OUT &= ~LED_GEAR_BL;
 			
 			// Control front panel fault indicator
-			if(switches & (SW_ACCEL_FAULT | SW_CAN_FAULT | SW_BRAKE_FAULT | SW_REV_FAULT)) P3OUT &= ~LED_REDn;
-			else P3OUT |= LED_REDn;
-			
+			if (switches & (SW_ACCEL_FAULT | SW_CAN_FAULT | SW_BRAKE_FAULT | SW_REV_FAULT)) P3OUT &= ~LED_REDn;
+			else P3OUT |= LED_REDn;			
 		}
 
 		// Handle outgoing communications events
-		if(events & EVENT_COMMS){
-			events &= ~EVENT_COMMS;
+		if (EVENT_COMMS_ACTIVE)
+		{
+			// Clear flag
+			EVENT_COMMS_CLR;
 			// Blink CAN activity LED
-			events |= EVENT_CAN_ACTIVITY;			
-
+			EVENT_CAN_ACTIVITY_SET;
 			// Update command state and override pedal commands if necessary
-			if(switches & SW_IGN_ON){
-				switch(command.state){
+			if (switches & SW_IGN_ON)
+			{
+				switch (command.state)
+				{
 					case MODE_R:
 					case MODE_DL:
 					case MODE_DH:
@@ -304,7 +338,8 @@ int main( void )
 					case MODE_BH:
 #ifndef REGEN_ON_BRAKE
 #ifdef CUTOUT_ON_BRAKE
-						if(switches & SW_BRAKE){
+						if (switches & SW_BRAKE)
+						{
 							command.current = 0.0;	
 							command.rpm = 0.0;
 						}
@@ -327,29 +362,31 @@ int main( void )
 						break;
 				}
 			}
-			else{
+			else
+			{
 				command.current = 0.0;
 				command.rpm = 0.0;
 			}
 
 			// Transmit commands and telemetry
-			if(events & EVENT_CONNECTED){
+			if (EVENT_CONNECTED_ACTIVE)
+			{
 				// Transmit drive command frame
-				can_push_ptr->address = DC_CAN_BASE + DC_DRIVE;
+				can_push_ptr->address = can_addr + DC_DRIVE;
 				can_push_ptr->status = 8;
 				can_push_ptr->data.data_fp[1] = command.current;
 				can_push_ptr->data.data_fp[0] = command.rpm;
 				can_push();		
 	
 				// Transmit bus command frame
-				can_push_ptr->address = DC_CAN_BASE + DC_POWER;
+				can_push_ptr->address = can_addr + DC_POWER;
 				can_push_ptr->status = 8;
 				can_push_ptr->data.data_fp[1] = command.bus_current;
 				can_push_ptr->data.data_fp[0] = 0.0;
 				can_push();
 				
 				// Transmit switch position/activity frame and clear switch differences variables
-				can_push_ptr->address = DC_CAN_BASE + DC_SWITCH;
+				can_push_ptr->address = can_addr + DC_SWITCH;
 				can_push_ptr->status = 8;
 				can_push_ptr->data.data_u8[7] = command.state;
 				can_push_ptr->data.data_u8[6] = command.flags;
@@ -360,26 +397,26 @@ int main( void )
 
 				// Transmit egear control packet if needed
 #ifdef USE_EGEAR
-				if(		(command.state == MODE_CO_R && next_state == MODE_CO_R)
+				if (		(command.state == MODE_CO_R && next_state == MODE_CO_R)
 					||	(command.state == MODE_CO_BL && next_state == MODE_CO_BL)
 					||	(command.state == MODE_CO_BH && next_state == MODE_CO_BH)
 					||	(command.state == MODE_CO_DL && next_state == MODE_CO_DL)
 					||	(command.state == MODE_CO_DH && next_state == MODE_CO_DH))
 				{
-					if( current_egear == EG_STATE_NEUTRAL)
+					if ( current_egear == EG_STATE_NEUTRAL)
 					{
 						can_push_ptr->address = EG_CAN_BASE + EG_COMMAND;
 						can_push_ptr->status = 8;
 						can_push_ptr->data.data_u32[0] = 0;
 						can_push_ptr->data.data_u32[1] = 0;
-						if(command.state == MODE_CO_R) can_push_ptr->data.data_u8[0] = EG_CMD_LOW;
-						else if( command.state == MODE_CO_BL) can_push_ptr->data.data_u8[0] = EG_CMD_LOW;
-						else if( command.state == MODE_CO_DL) can_push_ptr->data.data_u8[0] = EG_CMD_LOW;
-						else if( command.state == MODE_CO_BH) can_push_ptr->data.data_u8[0] = EG_CMD_HIGH;
-						else if( command.state == MODE_CO_DH) can_push_ptr->data.data_u8[0] = EG_CMD_HIGH;
+						if (command.state == MODE_CO_R) can_push_ptr->data.data_u8[0] = EG_CMD_LOW;
+						else if ( command.state == MODE_CO_BL) can_push_ptr->data.data_u8[0] = EG_CMD_LOW;
+						else if ( command.state == MODE_CO_DL) can_push_ptr->data.data_u8[0] = EG_CMD_LOW;
+						else if ( command.state == MODE_CO_BH) can_push_ptr->data.data_u8[0] = EG_CMD_HIGH;
+						else if ( command.state == MODE_CO_DH) can_push_ptr->data.data_u8[0] = EG_CMD_HIGH;
 						can_push();
 					}
-					else if(events & EVENT_MC_NEUTRAL)
+					else if (EVENT_MC_NEUTRAL_ACTIVE)
 					{
 						can_push_ptr->address = EG_CAN_BASE + EG_COMMAND;
 						can_push_ptr->status = 8;
@@ -389,7 +426,7 @@ int main( void )
 						can_push();
 					}
 				}
-				else if(command.state == MODE_N)
+				else if (command.state == MODE_N)
 				{
 					can_push_ptr->address = EG_CAN_BASE + EG_COMMAND;
 					can_push_ptr->status = 8;
@@ -398,7 +435,7 @@ int main( void )
 					can_push_ptr->data.data_u8[0] = EG_CMD_NEUTRAL;
 					can_push();
 				}
-				else if((command.state == MODE_BL) || (command.state == MODE_DL) || (command.state == MODE_R))
+				else if ((command.state == MODE_BL) || (command.state == MODE_DL) || (command.state == MODE_R))
 				{
 					can_push_ptr->address = EG_CAN_BASE + EG_COMMAND;
 					can_push_ptr->status = 8;
@@ -407,7 +444,7 @@ int main( void )
 					can_push_ptr->data.data_u8[0] = EG_CMD_LOW;
 					can_push();
 				}
-				else if((command.state == MODE_BH) || (command.state == MODE_DH))
+				else if ((command.state == MODE_BH) || (command.state == MODE_DH))
 				{
 					can_push_ptr->address = EG_CAN_BASE + EG_COMMAND;
 					can_push_ptr->status = 8;
@@ -420,142 +457,233 @@ int main( void )
 				
 				// Transmit our ID frame at a slower rate (every 10 events = 1/second)
 				comms_event_count++;
-				if(comms_event_count == 10){
+				if (comms_event_count == 10)
+				{
 					comms_event_count = 0;
-					can_push_ptr->address = DC_CAN_BASE;
+					can_push_ptr->address = can_addr;
 					can_push_ptr->status = 8;
-					can_push_ptr->data.data_u8[7] = 'T';
-					can_push_ptr->data.data_u8[6] = '0';
-					can_push_ptr->data.data_u8[5] = '8';
-					can_push_ptr->data.data_u8[4] = '6';
-					can_push_ptr->data.data_u32[0] = DEVICE_ID;
+					//NB: THESE WERE THE WRONG WAY... ALL TRITIUM DEVICES MUST HAVE DEVICE_ID IN LOWER 32BIT VALUE
+					can_push_ptr->data.data_u32[0] = hware.device_id;		// Device ID 
+					can_push_ptr->data.data_u32[1] = flash.serial;			// Serial number
 					can_push();		
 				}
 			}
 		}
 
 		// Check for CAN packet reception
-		if((P2IN & CAN_INTn) == 0x00){
+		if ((P2IN & CAN_INTn) == 0x00)
+		{
 			// IRQ flag is set, so run the receive routine to either get the message, or the error
 			can_receive();
 			// Check the status
-			if(can.status == CAN_OK){
+			if (can.status == CAN_OK)
+			{
 				// We've received a packet, so must be connected to something
-				events |= EVENT_CONNECTED;
+				EVENT_CONNECTED_SET;
 				// Process the packet
-				switch(can.address){
-					case MC_CAN_BASE + MC_VELOCITY:
-						// Update speed threshold event flags
-						if(can.data.data_fp[0] > ENGAGE_VEL_F) events |= EVENT_FORWARD;
-						else events &= ~EVENT_FORWARD;
-						if(can.data.data_fp[0] < ENGAGE_VEL_R) events |= EVENT_REVERSE;
-						else events &= ~EVENT_REVERSE;
-						if((can.data.data_fp[0] >= ENGAGE_VEL_R) && (can.data.data_fp[0] <= ENGAGE_VEL_F)) events |= EVENT_SLOW;
-						else events &= ~EVENT_SLOW;
-						if(can.data.data_fp[0] >= CHANGE_VEL_LTOH) events |= EVENT_OVER_VEL_LTOH;
-						else events &= ~EVENT_OVER_VEL_LTOH;
-						if(can.data.data_fp[0] >= CHANGE_VEL_HTOL) events |= EVENT_OVER_VEL_HTOL;
-						else events &= ~EVENT_OVER_VEL_HTOL;
-						motor_rpm = can.data.data_fp[0];
-						gauge_tach_update( motor_rpm );
-						break;
-					case MC_CAN_BASE + MC_I_VECTOR:
-						// Update regen status flags
-						if(can.data.data_fp[0] < REGEN_THRESHOLD) events |= EVENT_REGEN;
-						else events &= ~EVENT_REGEN;
-						break;
-					case MC_CAN_BASE + MC_TEMP1:
-						// Update data for temp gauge
-						controller_temp = can.data.data_fp[1];
-						motor_temp = can.data.data_fp[0];
-						gauge_temp_update( motor_temp, controller_temp );
-						break;
-					case MC_CAN_BASE + MC_LIMITS:
-						// Update neutral state of motor controller
-						if(can.data.data_u8[0] == 0) events |= EVENT_MC_NEUTRAL;
-						else events &= ~EVENT_MC_NEUTRAL;
-						break;
-					case MC_CAN_BASE + MC_BUS:
-						// Update battery voltage and current for fuel and power gauges
-						battery_voltage = can.data.data_fp[0];
-						battery_current = can.data.data_fp[1];
-						gauge_power_update( battery_voltage, battery_current );
-						gauge_fuel_update( battery_voltage );
-						break;
-					case DC_CAN_BASE + DC_BOOTLOAD:
-						// Switch to bootloader
-						if (		can.data.data_u8[0] == 'B' && can.data.data_u8[1] == 'O' && can.data.data_u8[2] == 'O' && can.data.data_u8[3] == 'T'
-								&&	can.data.data_u8[4] == 'L' && can.data.data_u8[5] == 'O' && can.data.data_u8[6] == 'A' && can.data.data_u8[7] == 'D' )
+				if (can.address == (can_addr + DC_BOOTLOAD) && (hware.bootloader_version < NEWBL_JUMP_MIN_VER))
+				{
+					//OLD BOOTLOADER JUMP MECHANISM - LEGACY SUPPORT ONLY
+					if (		can.data.data_u8[0] == 'B' && can.data.data_u8[1] == 'O' && can.data.data_u8[2] == 'O' && can.data.data_u8[3] == 'T'
+							&&	can.data.data_u8[4] == 'L' && can.data.data_u8[5] == 'O' && can.data.data_u8[6] == 'A' && can.data.data_u8[7] == 'D' )
+					{
+						WDTCTL = 0x00;	// Force watchdog reset
+					}
+				}
+				else if ((can.address == can_addr) && (can.data.data_u32[1] == flash.serial))
+				{
+					//TRITIUM PRODUCT VERSION REPORTING SYSTEM COMMAND
+					if (variant_devinfo_req(can.data.data_u8[3]) == DEV_INFO_REQ_BLOAD)
+					{
+						//NEW BOOTLOADER JUMP MECHANISM - Allow jump even if old BL.. It will work
+						//Jump to bootloader - MUST DISABLE INTERRUPTS and turn off PWM/ADC peripherals from pins
+						dint();
+						// Disable used peripheral interrupts (If new user code enables master interrupts these may trip an erroneous interrupt call if not implemented)
+						ADC12IE = 0;
+						TACCTL0 = 0;								
+						TBCCTL0 = 0;
+						//BL requires that the WD flag in IFG1 is cleared
+						__asm__ __volatile__ ("bic.b %0,&__IFG1" : : "i" (WDTIFG));
+						//Jump to BL - NB: Using reset vector address to get start address of BL
+						__asm__ __volatile__ ("br &0xFFFE");
+					}
+				}
+				else if (can.address == (MC_CAN_BASE + MC_VELOCITY))
+				{
+					// Update speed threshold event flags
+					if (can.data.data_fp[0] > ENGAGE_VEL_F) EVENT_FORWARD_SET;
+					else EVENT_FORWARD_CLR;
+					if (can.data.data_fp[0] < ENGAGE_VEL_R) EVENT_REVERSE_SET;
+					else EVENT_REVERSE_CLR;
+					if ((can.data.data_fp[0] >= ENGAGE_VEL_R) && (can.data.data_fp[0] <= ENGAGE_VEL_F)) EVENT_SLOW_SET;
+					else EVENT_SLOW_CLR;
+					if (can.data.data_fp[0] >= CHANGE_VEL_LTOH) EVENT_OVER_VEL_LTOH_SET;
+					else EVENT_OVER_VEL_LTOH_CLR;
+					if (can.data.data_fp[0] >= CHANGE_VEL_HTOL) EVENT_OVER_VEL_HTOL_SET;
+					else EVENT_OVER_VEL_HTOL_CLR;
+					motor_rpm = can.data.data_fp[0];
+					gauge_tach_update( motor_rpm );
+				}
+				else if (can.address == (MC_CAN_BASE + MC_I_VECTOR))
+				{
+					// Update regen status flags
+					if (can.data.data_fp[0] < REGEN_THRESHOLD) EVENT_REGEN_SET;
+					else EVENT_REGEN_CLR;
+				}
+				else if (can.address == (MC_CAN_BASE + MC_TEMP1))
+				{
+					// Update data for temp gauge
+					controller_temp = can.data.data_fp[1];
+					motor_temp = can.data.data_fp[0];
+					gauge_temp_update( motor_temp, controller_temp );
+				}
+				else if (can.address == MC_CAN_BASE)
+				{
+					//Must detect if WS is in bootload and ignore CAN id's (MC_BASE +1 & +2) until programming has completed
+					inblWS = (can.data.data_u8[3] == 0xFF);
+				}
+				else if (can.address == (MC_CAN_BASE + MC_LIMITS) && !inblWS)
+				{
+					// Update neutral state of motor controller
+					if (can.data.data_u8[0] == 0) EVENT_MC_NEUTRAL_SET;
+					else EVENT_MC_NEUTRAL_CLR;
+				}
+				else if (can.address == (MC_CAN_BASE + MC_BUS) && !inblWS)
+				{
+					// Update battery voltage and current for fuel and power gauges
+					battery_voltage = can.data.data_fp[0];
+					battery_current = can.data.data_fp[1];
+					gauge_power_update( battery_voltage, battery_current );
+					gauge_fuel_update( battery_voltage );
+				}
+				else if (can.address == (EG_CAN_BASE + EG_STATUS))
+				{
+					if ( can.data.data_u8[0] == EG_STATE_NEUTRAL ) current_egear = EG_STATE_NEUTRAL;
+					else if ( can.data.data_u8[0] == EG_STATE_LOW ) current_egear = EG_STATE_LOW;
+					else if ( can.data.data_u8[0] == EG_STATE_HIGH ) current_egear = EG_STATE_HIGH;
+				}
+				// Check for calibration / setup messages
+				else if (can.address == (can_addr + DC_SETUP))
+				{
+					// Write data command
+					if (can.data.data_u8[6] == FLASH_CMD_WRITE)
+					{
+						switch(can.data.data_u8[7])
 						{
-							WDTCTL = 0x00;	// Force watchdog reset
+							case FLASH_SERIAL:
+								flash.serial = can.data.data_u32[0];
+								break;
+							case FLASH_CAN_ID:
+								//Ensure the CAN ID is valid - otherwise may not be able to communicate with device correctly
+								//Default assumed range of IDs is 0x20. If more ID range is required then lower maximum ID check appropriately
+								if (!(can.data.data_u16[0] % 0x20) && (can.data.data_u16[0] <= 0x07E0)) flash.can_id = can.data.data_u16[0];
+								break;
+							case FLASH_CAN_BITRATE:
+								flash.can_bitrate = can.data.data_u16[0];
+								break;
+							case FLASH_WRITE_TRIGGER:
+								dint();
+								flash_erase();
+								flash_write((unsigned char *)(&flash), sizeof(flash));
+								eint();
+								// Force a reset of the part, to come back up in operating mode
+								WDTCTL = 0x00;	
+								break;
+							default:
+								break;
 						}
-						break;				
-					case EG_CAN_BASE + EG_STATUS:
-						if ( can.data.data_u8[0] == EG_STATE_NEUTRAL ) current_egear = EG_STATE_NEUTRAL;
-						else if ( can.data.data_u8[0] == EG_STATE_LOW ) current_egear = EG_STATE_LOW;
-						else if ( can.data.data_u8[0] == EG_STATE_HIGH ) current_egear = EG_STATE_HIGH;
-						break;
+					}
+					// Read data request
+					else if (can.data.data_u8[6] == FLASH_CMD_READ)
+					{
+						//Clear all data so dont have any ugly left over data send allong with requested value
+						can_push_ptr->data.data_u64 = 0;
+						switch(can.data.data_u8[7])
+						{
+							case FLASH_SERIAL:
+								can_push_ptr->data.data_u32[0] = flash.serial;
+								break;
+							case FLASH_CAN_ID:
+								can_push_ptr->data.data_u16[0] = flash.can_id;
+								break;
+							case FLASH_CAN_BITRATE:
+								can_push_ptr->data.data_u16[0] = flash.can_bitrate;
+								break;
+							default:
+								can_push_ptr->data.data_u32[0] = 0x00000000;
+								break;
+						}
+						can_push_ptr->address = (can_addr + DC_SETUP);
+						can_push_ptr->status = 8;
+						can_push_ptr->data.data_u8[7] = can.data.data_u8[7];
+						can_push_ptr->data.data_u8[6] = FLASH_CMD_REPLY;
+						can_push();
+					}
 				}
 			}
-			if(can.status == CAN_RTR){
+			else if (can.status == CAN_RTR)
+			{
 				// Remote request packet received - reply to it
-				switch(can.address){
-					case DC_CAN_BASE:
-						can_push_ptr->address = can.address;
-						can_push_ptr->status = 8;
-						can_push_ptr->data.data_u8[3] = 'T';
-						can_push_ptr->data.data_u8[2] = '0';
-						can_push_ptr->data.data_u8[1] = '8';
-						can_push_ptr->data.data_u8[0] = '6';
-						can_push_ptr->data.data_u32[1] = DEVICE_ID;
-						can_push();
-						break;
-					case DC_CAN_BASE + DC_DRIVE:
-						can_push_ptr->address = can.address;
-						can_push_ptr->status = 8;
-						can_push_ptr->data.data_fp[1] = command.current;
-						can_push_ptr->data.data_fp[0] = command.rpm;
-						can_push();
-						break;
-					case DC_CAN_BASE + DC_POWER:
-						can_push_ptr->address = can.address;
-						can_push_ptr->status = 8;
-						can_push_ptr->data.data_fp[1] = command.bus_current;
-						can_push_ptr->data.data_fp[0] = 0.0;
-						can_push();
-						break;
-					case DC_CAN_BASE + DC_SWITCH:
-						can_push_ptr->address = can.address;
-						can_push_ptr->status = 8;
-						can_push_ptr->data.data_u8[7] = command.state;
-						can_push_ptr->data.data_u8[6] = command.flags;
-						can_push_ptr->data.data_u16[2] = 0;
-						can_push_ptr->data.data_u16[1] = 0;
-						can_push_ptr->data.data_u16[0] = switches;
-						can_push();
-						break;
+				if (can.address == can_addr)
+				{
+					can_push_ptr->address = can.address;
+					can_push_ptr->status = 8;
+					//NB: THESE WERE THE WRONG WAY... ALL TRITIUM DEVICES MUST HAVE DEVICE_ID IN LOWER 32BIT VALUE
+					can_push_ptr->data.data_u32[0] = hware.device_id;	// Device ID
+					can_push_ptr->data.data_u32[1] = flash.serial;		// Serial number
+					can_push();
+				}
+				else if (can.address == (can_addr + DC_DRIVE))
+				{
+					can_push_ptr->address = can.address;
+					can_push_ptr->status = 8;
+					can_push_ptr->data.data_fp[1] = command.current;
+					can_push_ptr->data.data_fp[0] = command.rpm;
+					can_push();
+				}
+				else if (can.address == (can_addr + DC_POWER))
+				{
+					can_push_ptr->address = can.address;
+					can_push_ptr->status = 8;
+					can_push_ptr->data.data_fp[1] = command.bus_current;
+					can_push_ptr->data.data_fp[0] = 0.0;
+					can_push();
+				}
+				else if (can.address == (can_addr + DC_SWITCH))
+				{
+					can_push_ptr->address = can.address;
+					can_push_ptr->status = 8;
+					can_push_ptr->data.data_u8[7] = command.state;
+					can_push_ptr->data.data_u8[6] = command.flags;
+					can_push_ptr->data.data_u16[2] = 0;
+					can_push_ptr->data.data_u16[1] = 0;
+					can_push_ptr->data.data_u16[0] = switches;
+					can_push();
+				}
+				//LEGACY SUPPORT ONLY
+				else if (can.address == (can_addr + DC_INFO))
+				{
+					can_push_ptr->address = can.address;
+					can_push_ptr->status = 8;
+					can_push_ptr->data.data_u16[0] = BUILD_NUMBER;
+					can_push_ptr->data.data_u8[2] = hware.hardware_version;
+					can_push_ptr->data.data_u8[3] = hware.model_id;
+					can_push_ptr->data.data_u8[4] = hware.bootloader_version;
+//					can_push_ptr->data.data_u8[5] = can_tx_err_count;
+//					can_push_ptr->data.data_u8[6] = can_rx_err_count;
+					can_push_ptr->data.data_u8[5] = 0x00;
+					can_push_ptr->data.data_u8[6] = 0x00;
+					can_push_ptr->data.data_u8[7] = 0x00;
+					can_push();
 				}
 			}
-			if(can.status == CAN_ERROR){
-			}
+			//else if (can.status == CAN_ERROR){
+			//}
 		}
 	}
 	
 	// Will never get here, keeps compiler happy
 	return(1);
-}
-
-
-/*
- * Delay function
- */
-static void __inline__ brief_pause(register unsigned int n)
-{
-    __asm__ __volatile__ (
-		"1: \n"
-		" dec	%[n] \n"
-		" jne	1b \n"
-        : [n] "+r"(n));
 }
 
 /*
@@ -671,21 +799,25 @@ interrupt(TIMERB0_VECTOR) timer_b0(void)
 	static unsigned int gauge2_on, gauge2_off;
 	
 	// Toggle gauge 1 & 2 pulse frequency outputs
-	if(gauge_count == gauge1_on){
+	if (gauge_count == gauge1_on)
+	{
 		P4OUT |= GAUGE_1_OUT;
 		gauge1_on = gauge_count + gauge.g1_count;
 		gauge1_off = gauge_count + (gauge.g1_count >> 2);
 	}
-	if(gauge_count == gauge1_off){
+	if (gauge_count == gauge1_off)
+	{
 		P4OUT &= ~GAUGE_1_OUT;
 	}
 
-	if(gauge_count == gauge2_on){
+	if (gauge_count == gauge2_on)
+	{
 		P4OUT |= GAUGE_2_OUT;
 		gauge2_on = gauge_count + gauge.g2_count;
 		gauge2_off = gauge_count + (gauge.g2_count >> 2);
 	}
-	if(gauge_count == gauge2_off){
+	if (gauge_count == gauge2_off)
+	{
 		P4OUT &= ~GAUGE_2_OUT;
 	}
 
@@ -693,18 +825,22 @@ interrupt(TIMERB0_VECTOR) timer_b0(void)
 	gauge_count++;
 	
 	// Update outputs if necessary
-	if(events & EVENT_GAUGE1){
-		events &= ~EVENT_GAUGE1;
+	if (EVENT_GAUGE1_ACTIVE)
+	{
+		EVENT_GAUGE1_CLR;
 	}
-	if(events & EVENT_GAUGE2){
-		events &= ~EVENT_GAUGE2;
+	if (EVENT_GAUGE2_ACTIVE)
+	{
+		EVENT_GAUGE2_CLR;
 	}
-	if(events & EVENT_GAUGE3){
-		events &= ~EVENT_GAUGE3;
+	if (EVENT_GAUGE3_ACTIVE)
+	{
+		EVENT_GAUGE3_CLR;
 		TBCCR3 = gauge.g3_duty;		
 	}
-	if(events & EVENT_GAUGE4){
-		events &= ~EVENT_GAUGE4;
+	if (EVENT_GAUGE4_ACTIVE)
+	{
+		EVENT_GAUGE4_CLR;
 		TBCCR4 = gauge.g4_duty;		
 	}	
 }
@@ -720,70 +856,31 @@ interrupt(TIMERA0_VECTOR) timer_a0(void)
 	static unsigned char activity_count;
 	
 	// Trigger timer based events
-	events |= EVENT_TIMER;	
+	EVENT_TIMER_SET;
 	
 	// Trigger comms events (command packet transmission)
 	comms_count--;
-	if( comms_count == 0 ){
+	if ( comms_count == 0 )
+	{
 		comms_count = COMMS_SPEED;
-		events |= EVENT_COMMS;
+		EVENT_COMMS_SET;
 	}
 	
 	// Check for CAN activity events and blink LED
-	if(events & EVENT_CAN_ACTIVITY){
-		events &= ~EVENT_CAN_ACTIVITY;
+	if (EVENT_CAN_ACTIVITY_ACTIVE)
+	{
+		EVENT_CAN_ACTIVITY_CLR;
 		activity_count = ACTIVITY_SPEED;
 		P3OUT &= ~LED_GREENn;
 	}
-	if( activity_count == 0 ){
+	if ( activity_count == 0 )
+	{
 		P3OUT |= LED_GREENn;
 	}
-	else{
+	else
+	{
 		activity_count--;
 	}
-}
-
-/*
- * Collect switch inputs from hardware and fill out current state, and state changes
- *	- Inverts active low switches so that all bits in register are active high
- */
-void update_switches( unsigned int *state, unsigned int *difference)
-{
-	unsigned int old_switches;
-	
-	// Save state for difference tracking
-	old_switches = *state;
-
-	// Import switches into register
-	if(P2IN & IN_GEAR_4) *state |= SW_MODE_R;
-	else *state &= ~SW_MODE_R;
-
-	if(P2IN & IN_GEAR_3) *state |= SW_MODE_N;
-	else *state &= ~SW_MODE_N;
-
-	if(P2IN & IN_GEAR_2) *state |= SW_MODE_B;
-	else *state &= ~SW_MODE_B;
-
-	if(P2IN & IN_GEAR_1) *state |= SW_MODE_D;
-	else *state &= ~SW_MODE_D;
-	
-	if(P1IN & IN_IGN_ACCn) *state &= ~SW_IGN_ACC;
-	else *state |= SW_IGN_ACC;
-	
-	if(P1IN & IN_IGN_ONn) *state &= ~SW_IGN_ON;
-	else *state |= SW_IGN_ON;
-
-	if(P1IN & IN_IGN_STARTn) *state &= ~SW_IGN_START;
-	else *state |= SW_IGN_START;
-
-	if(P1IN & IN_BRAKEn) *state &= ~SW_BRAKE;
-	else *state |= SW_BRAKE;
-
-	if(P1IN & IN_FUEL) *state |= SW_FUEL;
-	else *state &= ~SW_FUEL;
-
-	// Update changed switches
-	*difference = *state ^ old_switches;	
 }
 
 /*
@@ -795,8 +892,5 @@ interrupt(ADC12_VECTOR) adc_isr(void)
 	// Clear ISR flag
 	ADC12IFG &= ~BIT6;
 	// Trigger ADC event in main loop
-	events |= EVENT_ADC;
+	EVENT_ADC_SET;
 }
-
-
-

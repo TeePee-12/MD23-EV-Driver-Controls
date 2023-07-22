@@ -15,7 +15,7 @@ MEMORY
   uservectors (rx)	: ORIGIN = 0x8010, LENGTH = 0x0040 /* END=0x8050, length of 64 to handle 4 bytes per interrupt, which allows "br" plus address */
   vectors (rw)      : ORIGIN = 0x8050, LENGTH = 0x0020 /* END=0x8070, put gcc generated vector table here, won't be used by code but addresses will be used during interrupt revectoring step */
   text   (rx)       : ORIGIN = 0x8070, LENGTH = 0x6d90 /* END=0xee00, user code program space, size of 27.39k */
-  hware_version (r) : ORIGIN = 0xffd8, LENGTH = 0x0008 /* END=0xffe0, size 8; device, project shared info */
+  hware_version (r) : ORIGIN = 0xffb8, LENGTH = 0x0008 /* END=0xffe0, size 8; device, project shared info */
 }
 
 SECTIONS

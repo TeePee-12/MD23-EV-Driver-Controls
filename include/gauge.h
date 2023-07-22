@@ -1,6 +1,6 @@
 /*
  * Tritium gauges interface header
- * Copyright (c) 2010, Tritium Pty Ltd.  All rights reserved.
+ * Copyright (c) 2015, Tritium Pty Ltd.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification, 
  * are permitted provided that the following conditions are met:
@@ -27,12 +27,15 @@
  *
  */
 
+#ifndef GAUGE_H
+#define GAUGE_H
+
 // Public function prototypes
-extern void gauge_init( void );
-extern void gauge_tach_update( float motor_rpm );
-extern void gauge_power_update( float battery_voltage, float battery_current );
-extern void gauge_temp_update( float motor_temp, float controller_temp );
-extern void gauge_fuel_update( float battery_voltage );
+void gauge_init( void );
+void gauge_tach_update( float motor_rpm );
+void gauge_power_update( float battery_voltage, float battery_current );
+void gauge_temp_update( float motor_temp, float controller_temp );
+void gauge_fuel_update( float battery_voltage );
 
 // Public variables
 typedef struct _gauge_variables {
@@ -74,5 +77,7 @@ extern gauge_variables gauge;
 
 // Temperature gauge scaling
 // BMW e36 gauge cluster:
+
+#endif	// GAUGE_H
 
 

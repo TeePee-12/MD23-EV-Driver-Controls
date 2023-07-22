@@ -1,6 +1,6 @@
 /*
  * Tritium pedal interface header
- * Copyright (c) 2010, Tritium Pty Ltd.  All rights reserved.
+ * Copyright (c) 2015, Tritium Pty Ltd.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification, 
  * are permitted provided that the following conditions are met:
@@ -23,8 +23,11 @@
  *
  */
 
+#ifndef PEDAL_H
+#define PEDAL_H
+
 // Public function prototypes
-extern void process_pedal( unsigned int a, unsigned int b, unsigned int c, unsigned char request_regen );
+void process_pedal( unsigned int a, unsigned int b, unsigned int c, unsigned char request_regen );
 
 // Public variables
 typedef struct _command_variables {
@@ -46,23 +49,24 @@ extern command_variables command;
 
 // Command parameter limits
 #define CURRENT_MAX				1.0					// %, absolute value
-#define REGEN_MAX				1.0					// %, absolute value
-#define RPM_FWD_MAX				4000				// Forwards max speed, rpm
-#define RPM_REV_MAX				-1500				// Reverse max speed, rpm
+#define REGEN_MAX				0.2					// %, absolute value
+#define RPM_FWD_MAX				4200				// Forwards max speed, rpm
+#define RPM_REV_MAX				-1000				// Reverse max speed, rpm
 
 // Analog pedal input scaling
 // Single input channel only (no redundancy)
 // Channel A = 0.00 to 5.00 Volts = 0 to 4096 counts
 // Channel B = Unused
-#define HALL_PEDAL
 
+//#define HALL_PEDAL
 #define ADC_MAX					4096
+
 #ifdef HALL_PEDAL
 	#define PEDAL_TRAVEL_MIN	245					// Hall pedal type sensor 0.3 - 3.9V travel
 	#define PEDAL_TRAVEL_MAX	3195
 #else
-	#define PEDAL_TRAVEL_MIN	200
-	#define PEDAL_TRAVEL_MAX	(ADC_MAX - 200)
+	#define PEDAL_TRAVEL_MIN	100
+	#define PEDAL_TRAVEL_MAX	(ADC_MAX - 100)
 #endif
 
 #define PEDAL_TRAVEL			(PEDAL_TRAVEL_MAX - PEDAL_TRAVEL_MIN)
@@ -70,10 +74,12 @@ extern command_variables command;
 #define PEDAL_ERROR_MAX			(ADC_MAX - 0)
 #define PEDAL_MISMATCH_MAX		100
 
-// Analog input for linear slider type pot for regenerative strenght control
+// Analog input for linear slider type pot for regenerative strength control
 // Channel C = 0.00 to 5.00 Volts = 0 to 4096 counts
-#define REGEN_TRAVEL_MIN		200
-#define REGEN_TRAVEL_MAX		(ADC_MAX - 200)
+#define REGEN_TRAVEL_MIN		100
+#define REGEN_TRAVEL_MAX		(ADC_MAX - 100)
 #define REGEN_TRAVEL			(REGEN_TRAVEL_MAX - REGEN_TRAVEL_MIN)
 #define REGEN_ERROR_MIN			0
 #define REGEN_ERROR_MAX			(ADC_MAX - 0)
+
+#endif	// PEDAL_H
