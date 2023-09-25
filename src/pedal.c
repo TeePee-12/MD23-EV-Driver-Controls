@@ -50,84 +50,108 @@ command_variables	command;
  */
 void process_pedal( unsigned int analog_a, unsigned int analog_b, unsigned int analog_c, unsigned char request_regen )
 {
-	float pedal, regen;
-	
-	// Error Flag updates
-	// Pedal too low
-	if(analog_a < PEDAL_ERROR_MIN) command.flags |= FAULT_ACCEL_LOW;
-	else command.flags &= ~FAULT_ACCEL_LOW;
-	// Pedal too high
-	if(analog_a > PEDAL_ERROR_MAX) command.flags |= FAULT_ACCEL_HIGH;
-	else command.flags &= ~FAULT_ACCEL_HIGH;
-	// Pedal A & B mismatch
-	// not implemented...
-	// Regen pot too low
-	if(analog_c < REGEN_ERROR_MIN) command.flags |= FAULT_REGEN_LOW;
-	else command.flags &= ~FAULT_REGEN_LOW;
-	// Pedal too high
-	if(analog_c > REGEN_ERROR_MAX) command.flags |= FAULT_REGEN_HIGH;
-	else command.flags &= ~FAULT_REGEN_HIGH;
-	
-	
-	// Run command calculations only if there are no pedal faults detected
-	if(command.flags == 0x00){
-		// Scale pedal input to a 0.0 to CURRENT_MAX range
-		// Clip lower travel region of pedal input
-		if(analog_a > PEDAL_TRAVEL_MIN) pedal = (analog_a - PEDAL_TRAVEL_MIN);
-		else pedal = 0.0;
-		// Scale pedal input to produce target motor current
-		pedal = pedal * CURRENT_MAX / PEDAL_TRAVEL;
-		// Check limits and clip upper travel region
-		if(pedal > CURRENT_MAX) pedal = CURRENT_MAX;
-		
-		// Scale regen input to a 0.0 to REGEN_MAX range
-		// Clip lower travel region of regen input
-		if(analog_c > REGEN_TRAVEL_MIN) regen = (analog_c - REGEN_TRAVEL_MIN);
-		else regen = 0.0;
-		// Scale regen input
-		regen = regen * REGEN_MAX / REGEN_TRAVEL;
-		// Check limits and clip upper travel region
-		if(regen > REGEN_MAX) regen = REGEN_MAX;
-		
-		// Choose target motor velocity
-		switch(command.state){
-			case MODE_R:
-				if( request_regen == FALSE ){
-					command.current = pedal;
-					command.rpm = RPM_REV_MAX;
-				}
-				else{
-					command.current = regen;
-					command.rpm = 0.0;
-				}
-				break;
-			case MODE_DL:
-			case MODE_DH:
-			case MODE_BL:
-			case MODE_BH:
-				if( request_regen == FALSE ){
-					command.current = pedal;
-					command.rpm = RPM_FWD_MAX;
-				}
-				else{
-					command.current = regen;
-					command.rpm = 0.0;
-				}
-				break;
-			case MODE_CHARGE:
-			case MODE_N:
-			case MODE_START:
-			case MODE_ON:
-			case MODE_OFF:
-			default:
-				command.current = 0.0;
-				command.rpm = 0.0;
-				break;
-		}
-	}
-	// There was a pedal fault detected
-	else{
-		command.current = 0.0;
-		command.rpm = 0.0;
-	}
+    //APPS1 = Analog_a (Pedal A)
+    //APPS2 = Analog_b (Pedal B)
+    //This is done to make sure that the value between the two are the same
+
+    float pedal, regen;
+
+    int analog_a_percent = (int)(((analog_a - PEDAL_A_MIN) / PEDAL_A_TRAVEL) * 100);
+    int analog_b_percent = (int)(((analog_b - PEDAL_B_MIN) / PEDAL_B_TRAVEL) * 100);
+
+
+    // Error Flag updates
+    // Pedal A too low
+    if(analog_a < PEDAL_A_MIN) command.flags |= FAULT_ACCEL_LOW;
+    else command.flags &= ~FAULT_ACCEL_LOW;
+    // Pedal A too high
+    if(analog_a > PEDAL_A_MAX) command.flags |= FAULT_ACCEL_HIGH;
+    else command.flags &= ~FAULT_ACCEL_HIGH;
+    // Pedal B too low
+    if(analog_b < PEDAL_B_MIN) command.flags |= FAULT_ACCEL_LOW;
+    else command.flags &= ~FAULT_ACCEL_LOW;
+    // Pedal B too high
+    if(analog_b > PEDAL_B_MAX) command.flags |= FAULT_ACCEL_HIGH;
+    else command.flags &= ~FAULT_ACCEL_HIGH;
+    // Pedal A & B mismatch
+    if((analog_a_percent > (int)1.1*analog_b_percent ) || (analog_a_percent < (int)0.9*analog_b_percent)) command.flags |= FAULT_ACCEL_MISMATCH;
+    else command.flags &= ~FAULT_ACCEL_MISMATCH;
+    if((analog_b_percent > (int)1.1*analog_a_percent) || (analog_b_percent < (int)0.9*analog_a_percent)) command.flags |= FAULT_ACCEL_MISMATCH;
+    else command.flags &= ~FAULT_ACCEL_MISMATCH;
+    // Regen pot too low
+    if(analog_c < REGEN_ERROR_MIN) command.flags |= FAULT_BRAKE_LOW;
+    else command.flags &= ~FAULT_BRAKE_LOW;
+    // Pedal too high
+    if(analog_c > REGEN_ERROR_MAX) command.flags |= FAULT_BRAKE_HIGH;
+    else command.flags &= ~FAULT_BRAKE_HIGH;
+    //Plausibility Check
+    if((analog_a_percent > 25) && (analog_c > REGEN_TRAVEL_MIN)) command.flags |= FAULT_PLAUSIBILITY_CHECK;
+    else if((command.flags |= FAULT_PLAUSIBILITY_CHECK) && (analog_a_percent == 0)) command.flags &= ~FAULT_PLAUSIBILITY_CHECK;
+
+
+
+
+
+
+    // Run command calculations only if there are no pedal faults detected
+    if(command.flags == 0x00){
+        // Scale pedal input to a 0.0 to CURRENT_MAX range
+        // Clip lower travel region of pedal input
+        if(analog_a > PEDAL_A_MIN) pedal = (analog_a - PEDAL_A_MIN);
+        else pedal = 0.0;
+        // Scale pedal input to produce target motor current
+        pedal = pedal * CURRENT_MAX / PEDAL_A_TRAVEL;
+        // Check limits and clip upper travel region
+        if(pedal > CURRENT_MAX) pedal = CURRENT_MAX;
+
+        // Scale regen input to a 0.0 to REGEN_MAX range
+        // Clip lower travel region of regen input
+        if(analog_c > REGEN_TRAVEL_MIN) regen = (analog_c - REGEN_TRAVEL_MIN);
+        else regen = 0.0;
+        // Scale regen input
+        regen = regen * REGEN_MAX / REGEN_TRAVEL;
+        // Check limits and clip upper travel region
+        if(regen > REGEN_MAX) regen = REGEN_MAX;
+
+        // Choose target motor velocity
+        switch(command.state){
+            case MODE_R:
+                if( request_regen == FALSE ){
+                    command.current = pedal;
+                    command.rpm = RPM_REV_MAX;
+                }
+                else{
+                    command.current = regen;
+                    command.rpm = 0.0;
+                }
+                break;
+            case MODE_DL:
+            case MODE_DH:
+            case MODE_BL:
+            case MODE_BH:
+                if( request_regen == FALSE ){
+                    command.current = pedal;
+                    command.rpm = RPM_FWD_MAX;
+                }
+                else{
+                    command.current = regen;
+                    command.rpm = 0.0;
+                }
+                break;
+            case MODE_CHARGE:
+            case MODE_N:
+            case MODE_START:
+            case MODE_ON:
+            case MODE_OFF:
+            default:
+                command.current = 0.0;
+                command.rpm = 0.0;
+                break;
+        }
+    }
+        // There was a pedal fault detected
+    else{
+        command.current = 0.0;
+        command.rpm = 0.0;
+    }
 }

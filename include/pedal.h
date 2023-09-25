@@ -43,12 +43,13 @@ extern command_variables command;
 #define FAULT_ACCEL_MISMATCH	0x04
 #define FAULT_REGEN_LOW			0x10
 #define FAULT_REGEN_HIGH		0x20
+#define FAULT_PLAUSIBILITY_CHECK 0x05 //Check if right
 
 // Command parameter limits
 #define CURRENT_MAX				1.0					// %, absolute value
 #define REGEN_MAX				1.0					// %, absolute value
-#define RPM_FWD_MAX				4000				// Forwards max speed, rpm
-#define RPM_REV_MAX				-1500				// Reverse max speed, rpm
+#define RPM_FWD_MAX				6500				// Forwards max speed, rpm
+#define RPM_REV_MAX				0				// Reverse max speed, rpm
 
 // Analog pedal input scaling
 // Single input channel only (no redundancy)
@@ -60,6 +61,11 @@ extern command_variables command;
 #ifdef HALL_PEDAL
 	#define PEDAL_TRAVEL_MIN	245					// Hall pedal type sensor 0.3 - 3.9V travel
 	#define PEDAL_TRAVEL_MAX	3195
+    #define PEDAL_A_MIN         2267
+    #define PEDAL_A_MAX         2700
+
+    #define PEDAL_B_MIN         353
+    #define PEDAL_B_MAX         694
 #else
 	#define PEDAL_TRAVEL_MIN	200
 	#define PEDAL_TRAVEL_MAX	(ADC_MAX - 200)
