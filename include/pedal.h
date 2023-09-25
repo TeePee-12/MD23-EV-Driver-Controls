@@ -41,8 +41,8 @@ extern command_variables command;
 #define FAULT_ACCEL_LOW			0x01
 #define FAULT_ACCEL_HIGH		0x02
 #define FAULT_ACCEL_MISMATCH	0x04
-#define FAULT_REGEN_LOW			0x10
-#define FAULT_REGEN_HIGH		0x20
+#define FAULT_BRAKE_LOW			0x10
+#define FAULT_BRAKE_HIGH		0x20
 #define FAULT_PLAUSIBILITY_CHECK 0x05 //Check if right
 
 // Command parameter limits
@@ -71,7 +71,8 @@ extern command_variables command;
 	#define PEDAL_TRAVEL_MAX	(ADC_MAX - 200)
 #endif
 
-#define PEDAL_TRAVEL			(PEDAL_TRAVEL_MAX - PEDAL_TRAVEL_MIN)
+#define PEDAL_A_TRAVEL			(PEDAL_A_MAX - PEDAL_B_MIN)
+#define PEDAL_B_TRAVEL          (PEDAL_B_MAX - PEDAL_B_MIN)
 #define PEDAL_ERROR_MIN			0
 #define PEDAL_ERROR_MAX			(ADC_MAX - 0)
 #define PEDAL_MISMATCH_MAX		100
