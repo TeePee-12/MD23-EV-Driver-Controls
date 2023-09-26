@@ -1,22 +1,33 @@
-name: Makefile CI
+name: Build Firmware Inside Docker
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches:
+      - unstable  # or replace with your default branch name
 
 jobs:
-  
   build:
     runs-on: ubuntu-latest
-    container: prohelion/msp430-builds-public:20081229
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-    
-    - name: Build Code
-      run: make -f makefile.docker
-      
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Create output directory
+      run: mkdir output
+
+    - name: Build Firmware in Docker
+      run: |
+        docker run --name ev-driver-controls -v ${PWD}/output:/output --rm -i -t prohelion/msp430-builds-public:20081229 bash -c "
+          git clone -b unstable https://github.com/Prohelion/EV-Driver-Controls.git code &&
+          cd code &&
+          make -f makefile.docker &&
+          cp -a build/. ../output
+        "
+        
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: firmware-artifacts
+        path: output/
 
